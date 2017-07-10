@@ -1,0 +1,107 @@
+---
+title: "Detecting Quality Of Unilateral Dumbbell Biceps Curl Using On-Body Sensor Data"
+author: "Chris Morris"
+output: html_document
+---
+
+```{r setup, warning=FALSE, echo=FALSE, results=FALSE, include=FALSE}
+start.time <- Sys.time()
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+library(parallel)
+library(doParallel)
+library(caret)
+library(beepr)
+```
+#Introduction
+This report aims to develop a machine learning model from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants to be able to access if the subject performed barbell lifts correctly or incorrectly. Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience.
+
+#Cleaning Data
+Before undertaking any automated machine learning, the columns were removed that containing insufficient number of observations or data that should not be used for modeling (such as the participants name or date measured).  
+```{r Getting and cleaning Data}
+quiz_testing <- read.csv("pml-testing.csv")
+raw_training <- read.csv("pml-training.csv", na.strings=c("NA","NaN", " ","") )
+
+#Collate any columns that have more than 50% NA values
+na_count <-sapply(raw_training, function(y) sum(length(which(is.na(y)))))
+na_exclude <- names(na_count[na_count > length(raw_training)/2])
+
+#Add in any columns that contain data which should not be used to train the model
+na_exclude <- c(na_exclude, 
+                'X', 
+                'user_name', 
+                'raw_timestamp_part_1', 
+                'raw_timestamp_part_2', 
+                'cvtd_timestamp', 
+                'new_window', 
+                'num_window')
+training <- raw_training[ , !(names(raw_training) %in% na_exclude)]
+```
+This resulted in `r ncol(training) -1` columns to be used to train the model and 1 column containing the class value
+
+#Spliting the Training Data
+Once the training data was cleaned, it was further split into a training and test set to allow for validation of the model
+```{r Further Training Split}
+set.seed(4815) #Used for repetability (the first numbers from Lost)
+inTrain = createDataPartition(training$classe, p = 3/4)[[1]]
+training = training[ inTrain,]
+testing = training[-inTrain,]
+```
+
+```{r Split Results, echo=FALSE}
+cat('Number of rows in training data:',dim(training)[1])
+cat('Number of rows in testing data:',dim(testing)[1])
+```
+
+#Training the Model
+Random Forest with Repeated Cross Validation from the Caret package was selected to train the model.  Random Forest seemed like it would be a good model to use as there is likely to be large amounts of variables that are weak predictors and by combining them would hopefully boost them to strong predictors.
+```{r training, warning=FALSE, results=FALSE}
+# Code based on article by Greski, L
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "repeatedcv", 
+                           number = 10, 
+                           allowParallel = TRUE)
+model <- train(classe ~ ., 
+               data= training, 
+               method="rf", 
+               trControl = fitControl)
+
+# De-register parallel processing cluster and return to a single thread
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+#Model Quality
+Once the model was generated, checks were undertaken to ensure that the model was of sufficient quality to be used for testing purposes.
+```{r quality}
+#Show the importance of each variable
+varImp(model, scale = FALSE)
+model$finalModel
+results <- predict(model, testing)
+confusionMatrix(results, testing$classe)
+
+```
+The Out of Bounds error estimate is extremely low (0.56%), which suggests that the predictions should be almost always right. Cross validation was undertaken by predicting the class variable on the testing set and the model was able to predict every set of observations correctly.
+
+#Quiz Set
+The model was then used to predict the outcome of a set of 20 observations where the class value was not included in the data set. 
+```{r Quiz set}
+quiz_results <- predict(model, quiz_testing)
+quiz_results
+```
+As expected by the low error estimate, all predictions were correct.
+
+#Summary
+The Random Forest model was extremely accurate, though there is a risk of over-training due to the limited number of subjects in the test. The application for people to use wearable technology to assess the quality rather than the quantity of the exercise is an exciting area for future development.  
+
+```{r cleanup, echo=FALSE, results=FALSE, include=FALSE}
+beep(sound = 6, expr = NULL) # play a sound when script is complete - an ode to the Original Warcraft
+time.taken <- Sys.time() - start.time
+capture.output(cat('Execution Time:',format(time.taken)))
+```
+
+#References
+Greski, L. Improving Performance of Random Forest in caret::train()
+https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md Accessed 09/07/2017
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
